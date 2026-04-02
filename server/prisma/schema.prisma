@@ -1,0 +1,242 @@
+// Prisma Schema for Smart Medicine Reminder & Tracker
+// Database: PostgreSQL
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── USER ───────────────────────────────────────────────
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  phone         String?
+  name          String
+  passwordHash  String
+  avatarUrl     String?
+  bloodType     String?
+  allergies     String[]
+  dateOfBirth   DateTime?
+  
+  // Tokens
+  refreshToken  String?
+  
+  // Timestamps
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  lastLoginAt   DateTime?
+
+  // Relations
+  medicines          Medicine[]
+  doseLogs           DoseLog[]
+  emergencyContacts  EmergencyContact[]
+  familyMembers      FamilyMember[]
+  sosEvents          SOSEvent[]
+
+  @@index([email])
+  @@map("users")
+}
+
+// ─── MEDICINE ───────────────────────────────────────────
+model Medicine {
+  id              String    @id @default(cuid())
+  userId          String
+  name            String
+  dosage          String
+  form            String    @default("tablet") // tablet, capsule, liquid, injection, etc.
+  frequency       String    // once-daily, twice-daily, etc.
+  instructions    String?   // e.g., "Take with food"
+  startDate       DateTime
+  endDate         DateTime?
+  stockQuantity   Int       @default(0)
+  refillThreshold Int       @default(7)        // Alert when stock <= this
+  expiryDate      DateTime?
+  color           String?   // For visual identification
+  isActive        Boolean   @default(true)
+
+  // Timestamps
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  // Relations
+  user            User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  schedules       Schedule[]
+  doseLogs        DoseLog[]
+  reminders       Reminder[]
+
+  @@index([userId])
+  @@index([userId, isActive])
+  @@map("medicines")
+}
+
+// ─── SCHEDULE ───────────────────────────────────────────
+model Schedule {
+  id                    String    @id @default(cuid())
+  medicineId            String
+  time                  String    // HH:mm format
+  dayOfWeek             Int?      // 0-6 (Sun-Sat), null = every day
+  isActive              Boolean   @default(true)
+  notificationsEnabled  Boolean   @default(true)
+  snoozeMinutes         Int       @default(10)
+
+  // Timestamps
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  // Relations
+  medicine              Medicine  @relation(fields: [medicineId], references: [id], onDelete: Cascade)
+  reminders             Reminder[]
+
+  @@index([medicineId])
+  @@index([medicineId, isActive])
+  @@map("schedules")
+}
+
+// ─── DOSE LOG ───────────────────────────────────────────
+model DoseLog {
+  id            String    @id @default(cuid())
+  userId        String
+  medicineId    String
+  status        DoseStatus
+  scheduledTime DateTime
+  takenTime     DateTime?
+  reason        String?   // Reason for missing
+  notes         String?
+  snoozed       Boolean   @default(false)
+  snoozeCount   Int       @default(0)
+
+  // Timestamps
+  createdAt     DateTime  @default(now())
+
+  // Relations
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  medicine      Medicine  @relation(fields: [medicineId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([userId, medicineId])
+  @@index([userId, createdAt])
+  @@index([scheduledTime])
+  @@map("dose_logs")
+}
+
+enum DoseStatus {
+  TAKEN
+  MISSED
+  SKIPPED
+  SNOOZED
+  PENDING
+}
+
+// ─── REMINDER ───────────────────────────────────────────
+model Reminder {
+  id            String        @id @default(cuid())
+  medicineId    String
+  scheduleId    String?
+  type          ReminderType
+  scheduledFor  DateTime
+  sentAt        DateTime?
+  status        ReminderStatus @default(PENDING)
+  message       String?
+
+  // Timestamps
+  createdAt     DateTime      @default(now())
+
+  // Relations
+  medicine      Medicine      @relation(fields: [medicineId], references: [id], onDelete: Cascade)
+  schedule      Schedule?     @relation(fields: [scheduleId], references: [id], onDelete: SetNull)
+
+  @@index([medicineId])
+  @@index([scheduledFor, status])
+  @@map("reminders")
+}
+
+enum ReminderType {
+  DOSE
+  REFILL
+  EXPIRY
+  CUSTOM
+}
+
+enum ReminderStatus {
+  PENDING
+  SENT
+  ACKNOWLEDGED
+  DISMISSED
+}
+
+// ─── EMERGENCY CONTACT ──────────────────────────────────
+model EmergencyContact {
+  id        String   @id @default(cuid())
+  userId    String
+  name      String
+  phone     String
+  email     String?
+  relation  String   // e.g., "Spouse", "Doctor", "Parent"
+  isPrimary Boolean  @default(false)
+  
+  // Timestamps
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("emergency_contacts")
+}
+
+// ─── FAMILY MEMBER ──────────────────────────────────────
+model FamilyMember {
+  id        String   @id @default(cuid())
+  userId    String   // The main user
+  name      String
+  relation  String
+  email     String?
+  phone     String?
+  canView   Boolean  @default(true)
+  canEdit   Boolean  @default(false)
+
+  // Timestamps
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("family_members")
+}
+
+// ─── SOS EVENT ──────────────────────────────────────────
+model SOSEvent {
+  id            String    @id @default(cuid())
+  userId        String
+  latitude      Float?
+  longitude     Float?
+  address       String?
+  status        SOSStatus @default(TRIGGERED)
+  resolvedAt    DateTime?
+  notes         String?
+
+  // Timestamps
+  createdAt     DateTime  @default(now())
+
+  // Relations
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([createdAt])
+  @@map("sos_events")
+}
+
+enum SOSStatus {
+  TRIGGERED
+  NOTIFIED
+  RESPONDED
+  RESOLVED
+  CANCELLED
+}
